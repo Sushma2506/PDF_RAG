@@ -12,6 +12,7 @@ from PIL import Image
 import fitz  # PyMuPDF for PDF images
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
+#from langchain_ollama import OllamaEmbeddings
 # Create a vector store with a sample text
 # from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_ollama import OllamaLLM
@@ -176,7 +177,7 @@ def read_file(file_path):
         except:
             return f"[ERROR: Could not read {os.path.basename(file_path)}]"
 
-def get_text_chunks(text, chunk_size=500, chunk_overlap=50):
+def get_text_chunks(text, chunk_size=1000, chunk_overlap=50):
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     final_split = splitter.split_text(text)
     return final_split
@@ -184,22 +185,22 @@ def get_text_chunks(text, chunk_size=500, chunk_overlap=50):
 if __name__ == "__main__":
     # Step 1: Read file and split into chunks
     full_text = read_file(file_path)
-    print(f"File loaded. Length: {len(full_text)} characters.")
+    # print(f"File loaded. Length: {len(full_text)} characters.")
     # print(full_text)
-    with open("output.txt", "w", encoding="utf-8") as f:
-        f.write(full_text)
-    print("extracted text save to output.txt")
+    # with open("output.txt", "w", encoding="utf-8") as f:
+    #     f.write(full_text)
+    # print("extracted text save to output.txt")
 
     chunks = get_text_chunks(full_text)
     #print(f"Split into {len(chunks)} chunks.")
-    for i, chunk in enumerate(chunks):
-        if "sevis" in chunk.lower():     # .lower() for case-insensitive search
-            print(f"FOUND SEVIS in chunk {i}: {chunk}")
+    # for i, chunk in enumerate(chunks):
+    #     if "sevis" in chunk.lower():     # .lower() for case-insensitive search
+    #         print(f"FOUND SEVIS in chunk {i}: {chunk}")
         
     # Step 2: Setup embeddings and LLM
-    ##embeddings = OllamaEmbeddings(model="llama3")
+    #embeddings = OllamaEmbeddings(model="llama3")
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    llm = OllamaLLM(model="llama3")
+    llm = OllamaLLM(model="gemma3:4b")
 
     # Step 3: Create/connect to Pinecone index (must be done before storing vectors)
     index_name = "my-first-rag-1"
@@ -207,6 +208,7 @@ if __name__ == "__main__":
     if not pc.has_index(index_name):
         pc.create_index(
             name=index_name,
+            #dimension=4096,     #llama3 dimensions (1536 is for OpenAI)
             dimension=384,    # all-MiniLM-L6-v2 dimensions
             metric="cosine",
             spec=ServerlessSpec(cloud="aws", region="us-east-1"),
@@ -238,7 +240,7 @@ if __name__ == "__main__":
         print(f"Skipping indexing. Using existing {vector_count} vectors.")
 
     # Step 5: Create retriever for querying
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
     
     # Step 6: Query loop
     while True:
@@ -250,16 +252,26 @@ if __name__ == "__main__":
 
         # Retrieve the most similar text
         # retrieved_documents = retriever.invoke(question)
+        # Add before retrieval
+        start = time.time()
+
         # Retrieve the most similar text WITH SCORES
-        retrieved_documents = vectorstore.similarity_search_with_score(question, k=8)
-        print("\n--- SOURCES FOUND ---")
-        for i, (doc, score) in enumerate(retrieved_documents, 1):
-            print(f"Source {i} (Score: {score:.4f}):\n{doc.page_content[:200]}...")
+        retrieved_documents = vectorstore.similarity_search_with_score(question, k=5)
+        retrieval_time = time.time()
+        # print("\n--- SOURCES FOUND ---")
+        # for i, (doc, score) in enumerate(retrieved_documents, 1):
+        #     print(f"Source {i} (Score: {score:.4f}):\n{doc.page_content[:200]}...")
             
         context = "\n\n".join([doc.page_content for doc, score in retrieved_documents])
-        print("\n=== FULL CONTEXT SENT TO LLM ===")
-        print(context[:2000])  # Show first 2000 chars
-        print("=== END CONTEXT ===\n")
+        # print("\n=== FULL CONTEXT SENT TO LLM ===")
+        # print(context[:2000])  # Show first 2000 chars
+        # print("=== END CONTEXT ===\n")
+
+        # ADD THIS
+        print(f"\n📊 Context stats:")
+        print(f"  Chunks: {len(retrieved_documents)}")
+        print(f"  Characters: {len(context):,}")
+        print(f"  Estimated tokens: ~{len(context) // 4:,}")
 
         # Generate response using context with a stricter prompt
         prompt = f"""You are a helpful assistant. Use ONLY the following pieces of context to answer the question at the end. 
@@ -280,7 +292,11 @@ if __name__ == "__main__":
         Answer:"""
         
         response = llm.invoke(prompt)
+        generation_time = time.time()
+        print(f"\n⏱️ TIMING:")
+        print(f"  Retrieval: {retrieval_time - start:.2f}s")
+        print(f"  Generation: {generation_time - retrieval_time:.2f}s") 
+        print(f"  Total: {generation_time - start:.2f}s")
         print(f"\nAnswer: {response}")
 else:
     print("Usage: python ReadFile.py")
-
